@@ -12,6 +12,7 @@ from gpytorch.likelihoods import MultitaskGaussianLikelihood
 from gpytorch.distributions import MultitaskMultivariateNormal
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
+from config import POINTS3D_PATH, IMAGES_TXT_PATH, DEPTH_FILE_PATH
 
 def load_points3D(file_path):
     points3d_dict = {}
@@ -27,7 +28,7 @@ def load_points3D(file_path):
             points3d_dict[point_id] = [x, y, z, r / 255.0, g / 255.0, b / 255.0]
     return points3d_dict
 
-file_path_points3d = '/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/mipnerf360/360_v2/flowers/sparse/0/points3D.txt'
+file_path_points3d = POINTS3D_PATH
 points3d_dict = load_points3D(file_path_points3d)
 
 
@@ -61,7 +62,7 @@ def parse_images_file(file_path, points3d_dict):
     return valid_data
 
 
-file_path_images = '/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/mipnerf360/360_v2/flowers/sparse/0/images.txt'
+file_path_images = IMAGES_TXT_PATH
 valid_data = parse_images_file(file_path_images, points3d_dict)
 
 import numpy as np
@@ -121,7 +122,7 @@ def generate_test_data(valid_data, depth_file_path):
 
     return data_by_image
 
-depth_file_path = '/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/mipnerf360/360_v2/flowers/depth/f.npy'
+depth_file_path = DEPTH_FILE_PATH
 
 data_by_image = generate_test_data(valid_data,depth_file_path)
 
