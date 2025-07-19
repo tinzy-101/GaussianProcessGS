@@ -1,17 +1,33 @@
 import torch
+import os
 import gpytorch
 from gpytorch.means import ConstantMean
 from gpytorch.kernels import RBFKernel, ScaleKernel, MaternKernel
 from gpytorch.likelihoods import MultitaskGaussianLikelihood
 from gpytorch.distributions import MultitaskMultivariateNormal, MultivariateNormal
-
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_squared_error
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
+
+from config import (
+    POINTS3D_PATH, 
+    DEPTH_FILE_PATH, 
+    IMAGES_TXT_PATH,
+    BASE_DIR,
+    SCENE_NAME
+)
+RADIUS = 0.4
+DYNAMIC_MVNTS = 10
+
+#Set up output directory if it doesn't exist
+GP_OUTPUT_DIR = os.path.join(BASE_DIR, "gp")
+os.makedirs(GP_OUTPUT_DIR, exist_ok= True)
+
+
 # Load and prepare data
-file_path_points3d = '/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/nerf_sythetic/ship/sparse/0/points3D.txt'
-depth_file_path = '/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/nerf_sythetic/ship/depth/m.npy'
+file_path_points3d = POINTS3D_PATH
+depth_file_path = DEPTH_FILE_PATH
 
 # Load points3D from file
 def load_points3D(file_path):
@@ -58,10 +74,10 @@ def parse_images_file(file_path, points3d_dict):
 
     return valid_data
 
-file_path_images = '/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/nerf_sythetic/ship/sparse/0/images.txt'
+file_path_images = IMAGES_TXT_PATH
 valid_data = parse_images_file(file_path_images, points3d_dict)
 
-def generate_test_data(valid_data, depth_file_path, radius_factor=0.4, num_samples=10):
+def generate_test_data(valid_data, depth_file_path, radius_factor=RADIUS, num_samples=DYNAMIC_MVNTS):
     """
     Generate test data adaptively around training data points using dynamic movements.
 
@@ -133,7 +149,7 @@ def generate_test_data(valid_data, depth_file_path, radius_factor=0.4, num_sampl
 
         return data_by_image
 
-
+#I stopped reviewing here come back tmr 
 
 
 data_by_image_new = generate_test_data(valid_data, depth_file_path)
