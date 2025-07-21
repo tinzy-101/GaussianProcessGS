@@ -4,6 +4,8 @@
 #The length scales are varied from 0.1 to 10 to find the best length scale for the model.
 
 import numpy as np
+import os
+import json
 import torch
 import gpytorch
 from gpytorch.means import ConstantMean
@@ -12,7 +14,7 @@ from gpytorch.likelihoods import MultitaskGaussianLikelihood
 from gpytorch.distributions import MultitaskMultivariateNormal
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
-from config import POINTS3D_PATH, IMAGES_TXT_PATH, DEPTH_FILE_PATH
+from config import BASE_DIR, POINTS3D_PATH, IMAGES_TXT_PATH, DEPTH_FILE_PATH
 
 def load_points3D(file_path):
     points3d_dict = {}
@@ -131,3 +133,14 @@ top_images = sorted(data_by_image.items(), key=lambda x: len(x[1]['input']), rev
 top_image_names = [image[0] for image in top_images]
 print("Top 4 images based on input data size:", top_image_names)
 print(len(np.load(depth_file_path)))
+
+#double check the directory exists
+os.makedirs(BASE_DIR, exist_ok= True)
+
+top_images_path = os.path.join(BASE_DIR,"top_four_images.json")
+
+#save the list of top images
+with open(top_images_path, "w") as f:
+    json.dump(top_image_names,f)
+
+print(f"Top 4 images saved to {top_images_path}")
