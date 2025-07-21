@@ -1,5 +1,6 @@
 import torch
 import os
+import json
 import gpytorch
 from gpytorch.means import ConstantMean
 from gpytorch.kernels import RBFKernel, ScaleKernel, MaternKernel
@@ -19,15 +20,22 @@ from config import (
 )
 RADIUS = 0.4
 DYNAMIC_MVNTS = 10
+TEST_SIZE = 0.2
+RANDOM_STATE = 42
+TRAINING_ITERATIONS = 10
+NUM_TASKS = 6
+LEARNING_RATE = 0.1
+WEIGHT_DECAY =1e-6 
 
 #Set up output directory if it doesn't exist
 GP_OUTPUT_DIR = os.path.join(BASE_DIR, "gp")
 os.makedirs(GP_OUTPUT_DIR, exist_ok= True)
 
 
-# Load and prepare data
+# Prepare data paths
 file_path_points3d = POINTS3D_PATH
 depth_file_path = DEPTH_FILE_PATH
+file_path_images = IMAGES_TXT_PATH
 
 # Load points3D from file
 def load_points3D(file_path):
@@ -43,9 +51,8 @@ def load_points3D(file_path):
             points3d_dict[point_id] = [x, y, z, r / 255.0, g / 255.0, b / 255.0]
     return points3d_dict
 
-points3d_dict = load_points3D(file_path_points3d)
-
-# Parse images file
+# Parse images file: matches image pixel coordinated to corresponding 3d points
+#uses Colmap's images.txt
 def parse_images_file(file_path, points3d_dict):
     valid_data = {}
     with open(file_path, 'r') as file:
@@ -73,9 +80,6 @@ def parse_images_file(file_path, points3d_dict):
             i += 1
 
     return valid_data
-
-file_path_images = IMAGES_TXT_PATH
-valid_data = parse_images_file(file_path_images, points3d_dict)
 
 def generate_test_data(valid_data, depth_file_path, radius_factor=RADIUS, num_samples=DYNAMIC_MVNTS):
     """
@@ -149,50 +153,45 @@ def generate_test_data(valid_data, depth_file_path, radius_factor=RADIUS, num_sa
 
         return data_by_image
 
-#I stopped reviewing here come back tmr 
+#Load and Preprocess data
+points3d_dict = load_points3D(file_path_points3d)
+valid_data = parse_images_file(file_path_images, points3d_dict)
 
+#Load key four images 
+top_images_path = os.path.join(BASE_DIR,"top_four_images.json")
+with open(top_images_path, "r") as f:
+    top_image_names = json.load(f)
 
+#filter on the top 4 images
+valid_data = {k: v for k, v in valid_data.items() if k in top_image_names}
+
+#Generate input/ouput/test sets
 data_by_image_new = generate_test_data(valid_data, depth_file_path)
 
-input_data_normalized = data_by_image_new['000072.png']['input']
+# Stack input and output data from the selected images
+all_input_data = []
 all_output_data = []
-for k in data_by_image_new.keys():  # Loop through all keys (images)
-    all_output_data.append(data_by_image_new[k]['output'])  # Collect outputs
-all_output_data = np.vstack(all_output_data)  # Stack into a single array
-scaler_output = MinMaxScaler()
-scaler_output.fit(all_output_data)
-output_data_normalized = scaler_output.transform(data_by_image_new['000072.png']['output'])
 
-#output_data_normalized = scaler_output.fit_transform(data_by_image_new['000094.png']['output'])
+for img_name in top_image_names:
+    all_input_data.append(data_by_image_new[img_name]['input'])
+    all_output_data.append(data_by_image_new[img_name]['output'])
+
+all_input_data = np.vstack(all_input_data)
+all_output_data = np.vstack(all_output_data)
+
+# Normalize input and output
+input_data_normalized = all_input_data
+scaler_output = MinMaxScaler().fit(all_output_data)
+output_data_normalized = scaler_output.transform(all_output_data)
 
 # Split data into train and test sets
-train_input, test_input, train_output, test_output = train_test_split(input_data_normalized, output_data_normalized, test_size=0.2, random_state=42)
-
+train_input, test_input, train_output, test_output = train_test_split(input_data_normalized, output_data_normalized, test_size=TEST_SIZE, random_state=RANDOM_STATE)
 train_input = torch.tensor(train_input, dtype=torch.float32)
 train_output = torch.tensor(train_output, dtype=torch.float32)
 test_input = torch.tensor(test_input, dtype=torch.float32)
 test_output = torch.tensor(test_output, dtype=torch.float32)
-#noise_factor = 0.05  # Adjust the noise level as per requirement
-#noisy_input_data = train_input + noise_factor * torch.randn_like(train_input)
-#train_input=noisy_input_data
-# Define the Multi-Task GP model
 
 
-def chamfer_distance(pred_points, true_points):
-    # pred_points: Tensor of shape (N, D)
-    # true_points: Tensor of shape (M, D)
-
-    pred_expanded = pred_points.unsqueeze(1)  # (N, 1, D)
-    true_expanded = true_points.unsqueeze(0)  # (1, M, D)
-
-    # Pairwise distances between predicted points and true points
-    distances = torch.norm(pred_expanded - true_expanded, dim=-1)  # (N, M)
-
-    # Compute Chamfer Distance
-    forward_cd = torch.mean(torch.min(distances, dim=1)[0])
-    backward_cd = torch.mean(torch.min(distances, dim=0)[0])
-
-    return forward_cd + backward_cd
 class MultiTaskGPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood, num_tasks):
         super(MultiTaskGPModel, self).__init__(train_x, train_y, likelihood)
@@ -204,8 +203,6 @@ class MultiTaskGPModel(gpytorch.models.ExactGP):
         )
 
 
-        #self.covar_module = ScaleKernel(RBFKernel(batch_shape=torch.Size([num_tasks])), batch_shape=torch.Size([num_tasks]))
-
 
 
     def forward(self, x):
@@ -213,64 +210,60 @@ class MultiTaskGPModel(gpytorch.models.ExactGP):
         covar_x = self.covar_module(x)
         return MultitaskMultivariateNormal.from_batch_mvn(MultivariateNormal(mean_x, covar_x))
 
-# Training setup
+
+def chamfer_distance(pred_points, true_points):
+    pred_expanded = pred_points.unsqueeze(1)  # (N, 1, D)
+    true_expanded = true_points.unsqueeze(0)  # (1, M, D)
+
+    # Pairwise distances between predicted points and true points
+    distances = torch.norm(pred_expanded - true_expanded, dim=-1)  # (N, M)
+
+    # Compute Chamfer Distance
+    forward_cd = torch.mean(torch.min(distances, dim=1)[0])
+    backward_cd = torch.mean(torch.min(distances, dim=0)[0])
+
+    return forward_cd + backward_cd
+
+
+# Training
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-train_input = train_input.to(device)
-train_output = train_output.to(device)
-#adding Noise Variance to ensure that the noise stays within a reasonable range, providing some regularization.
-#likelihood = MultitaskGaussianLikelihood(num_tasks=6, noise_prior=gpytorch.priors.GammaPrior(1.1, 0.05)).to(device)
-
 likelihood = MultitaskGaussianLikelihood(num_tasks=6).to(device)
-model = MultiTaskGPModel(train_input, train_output, likelihood, num_tasks=6).to(device)
-
-# Training loop
-model.train()
-likelihood.train()
-#add L2 regularization (weight decay) to the optimizer for the model parameters
-#optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-6)
-
+model = MultiTaskGPModel(train_input.to(device), train_output.to(device), likelihood, num_tasks=NUM_TASKS).to(device)
+optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
 
-training_iterations = 1000
 losses = []
-
-
-for i in range(training_iterations):
-    #print(model.covar_module.base_kernel.lengthscale)
+model.train()
+likelihood.train()
+for i in range(TRAINING_ITERATIONS):
     optimizer.zero_grad()
-    output = model(train_input)
-    loss = -mll(output, train_output)
+    output = model(train_input.to(device))
+    loss = -mll(output, train_output.to(device))
     losses.append(loss.item())
     loss.backward()
     optimizer.step()
-    print(f'Iteration {i + 1}/{training_iterations}, Loss: {loss.item()}')
+    print(f'Iteration {i + 1}/{TRAINING_ITERATIONS}, Loss: {loss.item()}')
 
-# Save the trained model and losses
-torch.save(model.state_dict(), '/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/nerf_sythetic/ship/gp/ship.pth')
-torch.save(likelihood.state_dict(), '/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/nerf_sythetic/ship/gp/shiplikelihood.pth')
-np.save('/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/nerf_sythetic/ship/gp/ship.npy', np.array(losses))
+
+#Save the output
+torch.save(model.state_dict(), os.path.join(GP_OUTPUT_DIR, f"{SCENE_NAME}.pth"))
+torch.save(likelihood.state_dict(), os.path.join(GP_OUTPUT_DIR, f"{SCENE_NAME}likelihood.pth"))
+np.save(os.path.join(GP_OUTPUT_DIR, f"{SCENE_NAME}.npy"), np.array(losses))
+
 
 # Evaluation
-test_input = test_input.to(device)
 model.eval()
 likelihood.eval()
 
 with torch.no_grad(), gpytorch.settings.fast_pred_var():
-    test_output_pred = model(test_input)
+    test_output_pred = model(test_input.to(device))
     mean_prediction = test_output_pred.mean.cpu().numpy()
     true_output = test_output.cpu().numpy()
-print(len(true_output))
-print(len(mean_prediction))
+
+
 r2 = r2_score(true_output, mean_prediction)
-print(f'R^2 Score (Accuracy): {r2:.3f}')
 rmse = np.sqrt(mean_squared_error(true_output, mean_prediction))
+cd = chamfer_distance(torch.tensor(mean_prediction), torch.tensor(true_output)).item()
 
-mean_prediction_tensor = torch.tensor(mean_prediction, dtype=torch.float32)
-true_output_tensor = torch.tensor(true_output, dtype=torch.float32)
+print(f'R^2 Score: {r2:.3f}, RMSE: {rmse:.3f}, Chamfer Distance: {cd:.3f}')
 
-# Now use the chamfer_distance function with PyTorch tensors
-chamfer_dist = chamfer_distance(mean_prediction_tensor, true_output_tensor).item()
-
-print(f'RMSE: {rmse:.3f}')
-print(f'cd:{chamfer_dist:.3f}')
