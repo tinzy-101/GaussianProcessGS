@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 '''
 # Load the predicted variance data
 predicted_var = np.load('/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/mipnerf360/360_v2/flowers/gp/ftest_var.npy')[0]
@@ -61,9 +62,10 @@ plt.show()
 
 import numpy as np
 import matplotlib.pyplot as plt
+from config import TEST_VAR
 
 # Load the predicted variance data
-predicted_var = np.load('/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/mipnerf360/360_v2/flowers/gp/ftest_var.npy')[0]
+predicted_var = np.load(TEST_VAR)[0]
 predicted_variance = np.array(predicted_var).reshape(-1, 6)
 
 # Extract variance for x, y, z, r, g, b
@@ -93,7 +95,12 @@ for i, (key, values) in enumerate(variance_components.items()):
 # Adjust layout for better visibility
 plt.tight_layout()
 
+# Create var_figure folder in the scene directory if it doesn't exist
+scene_dir = os.path.dirname(TEST_VAR)
+var_figure_dir = os.path.join(scene_dir, "var_figure")
+os.makedirs(var_figure_dir, exist_ok=True)
+
 # Save and display the plot
-plt.savefig('/home/staff/zhihao/Downloads/3dgs/mogp/var_figure/variance_plots_2perrow.png', dpi=300, bbox_inches='tight')
-plt.savefig('/home/staff/zhihao/Downloads/3dgs/mogp/var_figure/variance_plots.svg', bbox_inches='tight', format='svg')
+plt.savefig(os.path.join(var_figure_dir, "variance_plots_2perrow.png"), dpi=300, bbox_inches='tight')
+plt.savefig(os.path.join(var_figure_dir, "variance_plots.svg"), bbox_inches='tight', format='svg')
 plt.show()
