@@ -22,10 +22,11 @@ RADIUS = 0.4
 DYNAMIC_MVNTS = 10
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
-TRAINING_ITERATIONS = 10
+TRAINING_ITERATIONS = 50
 NUM_TASKS = 6
 LEARNING_RATE = 0.1
 WEIGHT_DECAY =1e-6 
+NU = 0.5
 
 #Set up output directory if it doesn't exist
 GP_OUTPUT_DIR = os.path.join(BASE_DIR, "gp")
@@ -81,78 +82,39 @@ def parse_images_file(file_path, points3d_dict):
 
     return valid_data
 
-def generate_test_data(valid_data, depth_file_path, radius_factor=RADIUS, num_samples=DYNAMIC_MVNTS):
+def generate_training_data(valid_data, depth_file_path):
     """
-    Generate test data adaptively around training data points using dynamic movements.
-
-    Parameters:
-    - valid_data (dict): Dictionary of image names and training points.
-    - depth_file_path (str): Path to the depth images (NumPy file).
-    - radius_factor (float): Fraction of the image size used to define movement radius.
-    - num_samples (int): Number of dynamic movements (directions) to sample around each point.
-
-    Returns:
-    - data_by_image (dict): Dictionary containing input, output, and test data for each image.
+    Generate training data from pixel-to-point correspondences only.
     """
-    # Load depth images and precompute image dimensions
     depth_images = np.load(depth_file_path)
     image_indices = {name: idx for idx, name in enumerate(sorted(valid_data.keys()))}
 
     data_by_image = {}
 
     for image_name, data_points in valid_data.items():
-        # Pre-fetch depth image and dimensions
         current_depth_image = depth_images[image_indices[image_name]]
         image_height, image_width = current_depth_image.shape
 
-        # Calculate adaptive radius based on image dimensions
-        adaptive_radius = int(radius_factor * min(image_height, image_width))
+        input_data = []
+        output_data = []
 
-        # Generate dynamic movements using polar coordinates
-        angles = np.linspace(0, 2 * np.pi, num_samples, endpoint=False)
-        movements = np.array([
-            (int(adaptive_radius * np.cos(angle)), int(adaptive_radius * np.sin(angle)))
-            for angle in angles
-        ])
+        for point in data_points:
+            x, y = int(point[0]), int(point[1])
+            if x < 0 or x >= image_width or y < 0 or y >= image_height:
+                continue
+            original_depth = current_depth_image[y, x]
+            input_data.append([x, y, original_depth])
+            output_data.append(point[2:])
 
-        for image_name, data_points in valid_data.items():
-            input_data = []
-            output_data = []
-            test_data = []
+        input_data = np.array(input_data, dtype=float)
+        input_data[:, 0] /= image_width  # Normalize x to [0, 1]
+        input_data[:, 1] /= image_height  # Normalize y to [0, 1]
+        data_by_image[image_name] = {
+            'input': input_data,
+            'output': np.array(output_data, dtype=float)
+        }
 
-            current_depth_image = depth_images[image_indices[image_name]]
-            image_height, image_width = current_depth_image.shape
-            for point in data_points:
-                x, y = int(point[0]), int(point[1])
-                if x < 0 or x >= image_width or y < 0 or y >= image_height:
-                    # Handle out-of-bounds case, skip or adjust
-                    continue
-                original_depth = current_depth_image[y, x]
-                input_data.append([x, y, original_depth])
-                output_data.append(point[2:])
-
-                # Generate test data around the point
-                for dx, dy in movements:
-
-                    new_x, new_y = x + dx, y + dy
-                    if 0 <= new_x < image_width and 0 <= new_y < image_height:
-                        new_depth = current_depth_image[new_y, new_x]
-                        test_data.append([new_x, new_y, new_depth])
-
-            input_data = np.array(input_data, dtype=float)
-            test_data = np.array(test_data, dtype=float)
-            input_data[:, 0] /= image_width  # Normalize x to [0, 1]
-            input_data[:, 1] /= image_height  # Normalize y to [0, 1]
-            test_data[:, 0] /= image_width
-            test_data[:, 1] /= image_height
-            data_by_image[image_name] = {
-                'input': input_data,
-                'output': np.array(output_data, dtype=float),
-                'test': test_data  # Store test data
-            }
-
-        return data_by_image
-
+    return data_by_image
 #Load and Preprocess data
 points3d_dict = load_points3D(file_path_points3d)
 valid_data = parse_images_file(file_path_images, points3d_dict)
@@ -166,7 +128,7 @@ with open(top_images_path, "r") as f:
 valid_data = {k: v for k, v in valid_data.items() if k in top_image_names}
 
 #Generate input/ouput/test sets
-data_by_image_new = generate_test_data(valid_data, depth_file_path)
+data_by_image_new = generate_training_data(valid_data, depth_file_path)
 
 # Stack input and output data from the selected images
 all_input_data = []
@@ -198,7 +160,7 @@ class MultiTaskGPModel(gpytorch.models.ExactGP):
         self.mean_module = ConstantMean(batch_shape=torch.Size([num_tasks]))
 
         self.covar_module = ScaleKernel(
-            MaternKernel(nu=0.5, batch_shape=torch.Size([num_tasks])),
+            MaternKernel(nu=NU, batch_shape=torch.Size([num_tasks])),
             batch_shape=torch.Size([num_tasks])
         )
 
