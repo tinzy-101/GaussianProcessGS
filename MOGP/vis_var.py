@@ -12,90 +12,61 @@ scene_dir = os.path.dirname(TEST_VAR)
 var_figure_dir = os.path.join(scene_dir, "var_figure")
 os.makedirs(var_figure_dir, exist_ok=True)
 
-# Extract variance for x, y, z, r, g, b
-r_var = predicted_variance[:, 3]
-g_var = predicted_variance[:, 4]
-b_var = predicted_variance[:, 5]
-rgb_mean = (r_var + g_var + b_var) / 3
-
-# Filtering based on 70th percentile
-threshold = np.percentile(rgb_mean, 74)
-filtered_indices = rgb_mean <= threshold
+# Filtering based on mean RGB variance
+rgb_var = predicted_variance[:, 3:6]
+mean_rgb_var = np.mean(rgb_var, axis=1)
+threshold = np.percentile(mean_rgb_var, 74)
+filtered_indices = mean_rgb_var <= threshold
 filtered_variance = predicted_variance[filtered_indices]
 
-# Load predicted means and apply the same filtering
-predict_mean = np.load(PREDICT_MEAN)[0]
-predict_mean = np.array(predict_mean).reshape(-1, 6)
-filtered_means = predict_mean[filtered_indices]
+#debuging 
+print("Total points:", len(predicted_variance))
+print("Points after filtering:", np.sum(filtered_indices))
+print("Points removed:", len(predicted_variance) - np.sum(filtered_indices))
 
-#filtered_variance = predicted_variance
-# Define colors with high contrast
-colors = ['#E6194B', '#3CB44B', '#4363D8', '#F58231', '#911EB4', '#46F0F0']
-line_styles = ['-', '--', '-.', ':', '-', '--']
+# Compute y-limits from unfiltered data
+spatial_ylim = [np.min(predicted_variance[:, :3]), np.max(predicted_variance[:, :3])]
+color_ylim = [np.min(predicted_variance[:, 3:]), np.max(predicted_variance[:, 3:])]
+ylims = [spatial_ylim, color_ylim]
 
-# Create a figure with two subplots (one for x, y, z and another for r, g, b)
-fig, axes = plt.subplots(2, 1, figsize=(12, 8), dpi=600, sharex=True, gridspec_kw={'height_ratios': [1, 1]})
+def plot_variances(variance, title_prefix, save_path, ylims=None):
+    colors = ['#E6194B', '#3CB44B', '#4363D8', '#F58231', '#911EB4', '#46F0F0']
+    labels = ['Variance in x', 'Variance in y', 'Variance in z', 'Variance in r', 'Variance in g', 'Variance in b']
 
-# Plot variance for spatial coordinates (x, y, z) in the top subplot
-axes[0].plot(range(len(filtered_variance)), filtered_variance[:, 0], label='Variance in x', color=colors[0], linestyle=line_styles[0], linewidth=2)
-axes[0].plot(range(len(filtered_variance)), filtered_variance[:, 1], label='Variance in y', color=colors[1], linestyle=line_styles[1], linewidth=2)
-axes[0].plot(range(len(filtered_variance)), filtered_variance[:, 2], label='Variance in z', color=colors[2], linestyle=line_styles[2], linewidth=2)
-#axes[0].set_ylabel('Spatial Variance (x, y, z)', fontsize=20, fontweight='bold')
-axes[0].legend(fontsize=14, loc='upper right', frameon=False)
+    fig, axes = plt.subplots(2, 1, figsize=(12, 8), dpi=300, sharex=True, gridspec_kw={'height_ratios': [1, 1]})
 
-# Plot variance for color channels (r, g, b) in the bottom subplot
-axes[1].plot(range(len(filtered_variance)), filtered_variance[:, 3], label='Variance in r', color=colors[3], linestyle=line_styles[3], linewidth=2)
-axes[1].plot(range(len(filtered_variance)), filtered_variance[:, 4], label='Variance in g', color=colors[4], linestyle=line_styles[4], linewidth=2)
-axes[1].plot(range(len(filtered_variance)), filtered_variance[:, 5], label='Variance in b', color=colors[5], linestyle=line_styles[5], linewidth=2)
-#axes[1].set_ylabel('Color Variance (r, g, b)', fontsize=20, fontweight='bold')
-axes[1].legend(fontsize=14, loc='upper right', frameon=False)
+    # Top: spatial variances
+    for i in range(3):
+        axes[0].plot(range(len(variance)), variance[:, i], label=labels[i], color=colors[i], linewidth=1)
+    axes[0].legend(fontsize=12, loc='upper right', frameon=False)
+    axes[0].set_ylabel('Spatial Variance')
+    if ylims is not None:
+        axes[0].set_ylim(ylims[0])
 
-# Shared x-axis customization
-#axes[1].set_xlabel('Sample Index', fontsize=16, fontweight='bold')
-#Filtered
-# Title for the whole figure
-#fig.suptitle('Variance for Spatial and Color Components (MipNeRF 360 - flowers)', fontsize=20, fontweight='bold')
+    # Bottom: color variances
+    for i in range(3, 6):
+        axes[1].plot(range(len(variance)), variance[:, i], label=labels[i], color=colors[i], linewidth=1)
+    axes[1].legend(fontsize=12, loc='upper right', frameon=False)
+    axes[1].set_ylabel('Color Variance')
+    axes[1].set_xlabel('Sample Index')
+    if ylims is not None:
+        axes[1].set_ylim(ylims[1])
 
-# Adjust spacing between subplots
-plt.tight_layout()
-plt.subplots_adjust(hspace=0.15)  # Reduce space between subplots
+    fig.suptitle(f'{title_prefix} Variance', fontsize=16)
+    plt.tight_layout()
+    plt.subplots_adjust(hspace=0.15)
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
 
-# Save as high-quality PNG
-plt.savefig(os.path.join(var_figure_dir, "variance_plots_uncertainty_filtered.png"), dpi=300, bbox_inches='tight')
-plt.show()
-
-
-
-# Extract variance for x, y, z, r, g, b
-variance_components = {
-    'Variance in x': predicted_variance[:, 0],
-    'Variance in y': predicted_variance[:, 1],
-    'Variance in z': predicted_variance[:, 2],
-    'Variance in r': predicted_variance[:, 3],
-    'Variance in g': predicted_variance[:, 4],
-    'Variance in b': predicted_variance[:, 5]
-}
-
-# Define colors for better visualization
-colors = ['#E6194B', '#3CB44B', '#4363D8', '#F58231', '#911EB4', '#46F0F0']
-
-# Create a figure with 6 subplots (3 rows, 2 columns)
-fig, axes = plt.subplots(3, 2, figsize=(12, 9), dpi=300)
-
-# Plot each variance component in a separate subplot (2 per row)
-for i, (key, values) in enumerate(variance_components.items()):
-    ax = axes[i // 2, i % 2]  # Map to subplot grid (3 rows, 2 columns)
-    ax.plot(range(len(values)), values, color=colors[i], linewidth=2)
-    ax.set_title(key, fontsize=14)
-    ax.set_xlabel('Sample Index')
-    ax.set_ylabel('Variance')
-
-# Adjust layout for better visibility
-plt.tight_layout()
+# Plot unfiltered
+plot_variances(predicted_variance, "Unfiltered", os.path.join(var_figure_dir, "variance_plots_unfiltered.png"), ylims=ylims)
+# Plot filtered
+plot_variances(filtered_variance, "Filtered", os.path.join(var_figure_dir, "variance_plots_filtered.png"), ylims=ylims)
 
 
 
-# Save and display the plot
-plt.savefig(os.path.join(var_figure_dir, "variance_plots_2perrow.png"), dpi=300, bbox_inches='tight')
-plt.savefig(os.path.join(var_figure_dir, "variance_plots.svg"), bbox_inches='tight', format='svg')
+plt.hist(mean_rgb_var, bins=50)
+plt.title("Histogram of Mean RGB Variance")
+plt.xlabel("Mean RGB Variance")
+plt.ylabel("Count")
 plt.show()
