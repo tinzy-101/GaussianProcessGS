@@ -22,7 +22,7 @@ RADIUS = 0.4
 DYNAMIC_MVNTS = 10
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
-TRAINING_ITERATIONS = 50
+TRAINING_ITERATIONS = 300
 NUM_TASKS = 6
 LEARNING_RATE = 0.1
 WEIGHT_DECAY =1e-6 
@@ -82,7 +82,7 @@ def parse_images_file(file_path, points3d_dict):
 
     return valid_data
 
-def generate_training_data(valid_data, depth_file_path):
+def generate_training_data(valid_data, depth_file_path,min_depth, max_depth):
     """
     Generate training data from pixel-to-point correspondences only.
     """
@@ -103,7 +103,8 @@ def generate_training_data(valid_data, depth_file_path):
             if x < 0 or x >= image_width or y < 0 or y >= image_height:
                 continue
             original_depth = current_depth_image[y, x]
-            input_data.append([x, y, original_depth])
+            normalized_depth = (original_depth - min_depth) / (max_depth - min_depth)
+            input_data.append([x, y,normalized_depth])
             output_data.append(point[2:])
 
         input_data = np.array(input_data, dtype=float)
@@ -115,9 +116,30 @@ def generate_training_data(valid_data, depth_file_path):
         }
 
     return data_by_image
+
+
 #Load and Preprocess data
 points3d_dict = load_points3D(file_path_points3d)
 valid_data = parse_images_file(file_path_images, points3d_dict)
+
+#Load Depth images and normalize
+depth_images = np.load(depth_file_path)
+image_indices = {name: i for i, name in enumerate(sorted(valid_data.keys()))}
+
+all_depths =[]
+
+for img_name, data_points in valid_data.items():
+    current_depth_image = depth_images[image_indices[img_name]]
+    img_height, img_width = current_depth_image.shape
+    for point in data_points:
+        x,y = int(point[0]), int(point[1])
+        if x < 0 or x >= img_width or y<0 or y>= img_height:
+            continue
+        original_depth = current_depth_image[y,x]
+        all_depths.append(original_depth)
+
+min_depth = np.min(all_depths)
+max_depth = np.max(all_depths) 
 
 #Load key four images 
 top_images_path = os.path.join(BASE_DIR,"top_four_images.json")
@@ -128,7 +150,9 @@ with open(top_images_path, "r") as f:
 valid_data = {k: v for k, v in valid_data.items() if k in top_image_names}
 
 #Generate input/ouput/test sets
-data_by_image_new = generate_training_data(valid_data, depth_file_path)
+data_by_image_new = generate_training_data(valid_data, depth_file_path, min_depth,max_depth)
+
+
 
 # Stack input and output data from the selected images
 all_input_data = []
@@ -153,6 +177,11 @@ train_output = torch.tensor(train_output, dtype=torch.float32)
 test_input = torch.tensor(test_input, dtype=torch.float32)
 test_output = torch.tensor(test_output, dtype=torch.float32)
 
+import pandas as pd
+train_x_df = pd.DataFrame(train_input)
+print(train_x_df.describe())
+train_y_df = pd.DataFrame(train_output)
+print(train_y_df.describe())
 
 class MultiTaskGPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood, num_tasks):
