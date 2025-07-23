@@ -3,11 +3,12 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 from transformers import pipeline
+from config import SCENE_NAME, BASE_DIR
 
-#Configuration (to be moved to config file after testing)
-scene_name = "flowers"
-image_dir = f"mipnerf360/{scene_name}/images"
-depth_dir = f"mipnerf360/{scene_name}/depth"
+#Configurations
+
+image_dir = f"{BASE_DIR}/images"
+depth_dir = f"{BASE_DIR}/depth"
 output_npy_path = os.path.join(depth_dir, "f.npy")
 depth_model = "depth-anything/Depth-Anything-V2-Large-hf"
 
