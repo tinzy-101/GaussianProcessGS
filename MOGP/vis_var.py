@@ -1,10 +1,16 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-'''
+from config import TEST_VAR, PREDICT_MEAN
+
 # Load the predicted variance data
-predicted_var = np.load('/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/mipnerf360/360_v2/flowers/gp/ftest_var.npy')[0]
+predicted_var = np.load(TEST_VAR)[0]
 predicted_variance = np.array(predicted_var).reshape(-1, 6)
+
+# Create var_figure folder in the scene directory if it doesn't exist
+scene_dir = os.path.dirname(TEST_VAR)
+var_figure_dir = os.path.join(scene_dir, "var_figure")
+os.makedirs(var_figure_dir, exist_ok=True)
 
 # Extract variance for x, y, z, r, g, b
 r_var = predicted_variance[:, 3]
@@ -18,7 +24,7 @@ filtered_indices = rgb_mean <= threshold
 filtered_variance = predicted_variance[filtered_indices]
 
 # Load predicted means and apply the same filtering
-predict_mean = np.load('/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/mipnerf360/360_v2/flowers/gp/fmean.npy')[0]
+predict_mean = np.load(PREDICT_MEAN)[0]
 predict_mean = np.array(predict_mean).reshape(-1, 6)
 filtered_means = predict_mean[filtered_indices]
 
@@ -55,18 +61,10 @@ plt.tight_layout()
 plt.subplots_adjust(hspace=0.15)  # Reduce space between subplots
 
 # Save as high-quality PNG
-plt.savefig('/home/staff/zhihao/Downloads/3dgs/mogp/var_figure/room/f_after.png', dpi=600, bbox_inches='tight')
+plt.savefig(os.path.join(var_figure_dir, "variance_plots_uncertainty_filtered.png"), dpi=300, bbox_inches='tight')
 plt.show()
-'''
 
 
-import numpy as np
-import matplotlib.pyplot as plt
-from config import TEST_VAR
-
-# Load the predicted variance data
-predicted_var = np.load(TEST_VAR)[0]
-predicted_variance = np.array(predicted_var).reshape(-1, 6)
 
 # Extract variance for x, y, z, r, g, b
 variance_components = {
@@ -95,10 +93,7 @@ for i, (key, values) in enumerate(variance_components.items()):
 # Adjust layout for better visibility
 plt.tight_layout()
 
-# Create var_figure folder in the scene directory if it doesn't exist
-scene_dir = os.path.dirname(TEST_VAR)
-var_figure_dir = os.path.join(scene_dir, "var_figure")
-os.makedirs(var_figure_dir, exist_ok=True)
+
 
 # Save and display the plot
 plt.savefig(os.path.join(var_figure_dir, "variance_plots_2perrow.png"), dpi=300, bbox_inches='tight')
