@@ -2,6 +2,14 @@ import numpy as np
 import open3d as o3d
 import matplotlib.pyplot as plt
 import re
+import os
+from config import POINTS3D_PATH, IMAGES_TXT_PATH, DEPTH_FILE_PATH
+
+
+file_path_points3d = POINTS3D_PATH
+file_path_images = IMAGES_TXT_PATH
+depth_file_path = DEPTH_FILE_PATH
+
 def find_max_point_id(file_path):
     max_point_id = 0
     with open(file_path, 'r') as file:
@@ -22,7 +30,8 @@ def count_3d_points(file_path):
                 continue
             count += 1
     return count
-file_path_points3d = '/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/nerf_sythetic/ship/sparse/0/points3D.txt'
+
+
 num_3d_points = count_3d_points(file_path_points3d)
 print("Number of 3D points:", num_3d_points)
 
@@ -44,7 +53,7 @@ def load_points3D(file_path):
             points3d_dict[point_id] = [x, y, z, r / 255.0, g / 255.0, b / 255.0]
     return points3d_dict
 
-file_path_points3d = '/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/nerf_sythetic/ship/sparse/0/points3D.txt'
+
 points3d_dict = load_points3D(file_path_points3d)
 
 def update_images_txt_optimized(images_txt_path, predictions):
@@ -100,7 +109,7 @@ def parse_images_file(file_path, points3d_dict):
     return valid_data
 
 
-file_path_images = '/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/nerf_sythetic/ship/sparse/0/images.txt'
+
 valid_data = parse_images_file(file_path_images, points3d_dict)
 
 
@@ -175,8 +184,9 @@ def generate_test_data(valid_data, depth_file_path, radius_factor=0.2, num_sampl
 
         return data_by_image
 
-depth_file_path = '/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/nerf_sythetic/ship/depth/m.npy'
 
+
+#NEED TO MAKE THIS DYNAMIC 
 data_by_image_new = generate_test_data(valid_data,depth_file_path)
 test_data_normalized_new = data_by_image_new['000072.png']['test']
 predicted_var = np.load('/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/nerf_sythetic/ship/gp/72test_var.npy')[0]

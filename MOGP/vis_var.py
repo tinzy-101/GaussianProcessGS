@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-from config import TEST_VAR, PREDICT_MEAN
+from config import POINTS3D_PATH, IMAGES_TXT_PATH, DEPTH_FILE_PATH, BASE_DIR, SCENE_NAME, TEST_VAR, PREDICT_MEAN
 
 # Load the predicted variance data
 predicted_var = np.load(TEST_VAR)[0]
@@ -15,7 +15,7 @@ os.makedirs(var_figure_dir, exist_ok=True)
 # Filtering based on mean RGB variance
 rgb_var = predicted_variance[:, 3:6]
 mean_rgb_var = np.mean(rgb_var, axis=1)
-threshold = np.percentile(mean_rgb_var, 74)
+threshold = np.percentile(mean_rgb_var, 50)
 filtered_indices = mean_rgb_var <= threshold
 filtered_variance = predicted_variance[filtered_indices]
 
@@ -59,9 +59,9 @@ def plot_variances(variance, title_prefix, save_path, ylims=None):
     plt.close()
 
 # Plot unfiltered
-plot_variances(predicted_variance, "Unfiltered", os.path.join(var_figure_dir, "variance_plots_unfiltered.png"), ylims=ylims)
+plot_variances(predicted_variance, "Unfiltered", os.path.join(var_figure_dir, "variance_plots_unfiltered.png"))
 # Plot filtered
-plot_variances(filtered_variance, "Filtered", os.path.join(var_figure_dir, "variance_plots_filtered.png"), ylims=ylims)
+plot_variances(filtered_variance, "Filtered", os.path.join(var_figure_dir, "variance_plots_filtered.png"))
 
 
 
