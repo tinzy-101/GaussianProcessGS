@@ -83,7 +83,7 @@ file_path_images = IMAGES_TXT_PATH
 valid_data = parse_images_file(file_path_images, points3d_dict)
 
 
-def generate_test_data(valid_data, depth_file_path, radius_factor=0.2, num_samples=10):
+def generate_test_data(valid_data, depth_file_path, radius_factor=RADIUS, num_samples=DYNAMIC_MVNTS):
     """
     Generate test data adaptively around training data points using dynamic movements.
 
