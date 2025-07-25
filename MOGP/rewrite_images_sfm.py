@@ -1,14 +1,18 @@
 import numpy as np
-import open3d as o3d
 import matplotlib.pyplot as plt
 import re
 import os
-from config import POINTS3D_PATH, IMAGES_TXT_PATH, DEPTH_FILE_PATH
+import json
+from config import POINTS3D_PATH, IMAGES_TXT_PATH, DEPTH_FILE_PATH, BASE_DIR, TEST_VAR,  PREDICT_MEAN
 
 
 file_path_points3d = POINTS3D_PATH
 file_path_images = IMAGES_TXT_PATH
 depth_file_path = DEPTH_FILE_PATH
+
+#Constants
+RADIUS = 0.4
+DYNAMIC_MVNTS = 10
 
 def find_max_point_id(file_path):
     max_point_id = 0
@@ -20,6 +24,7 @@ def find_max_point_id(file_path):
             point_id = int(parts[0])
             max_point_id = max(max_point_id, point_id)
     return max_point_id
+
 
 def count_3d_points(file_path):
     count = 0
@@ -54,8 +59,6 @@ def load_points3D(file_path):
     return points3d_dict
 
 
-points3d_dict = load_points3D(file_path_points3d)
-
 def update_images_txt_optimized(images_txt_path, predictions):
     # Read the entire file content
     with open(images_txt_path, 'r') as file:
@@ -79,7 +82,8 @@ def update_images_txt_optimized(images_txt_path, predictions):
     # Write all lines back to the file in one operation
     with open(images_txt_path, 'w') as file:
         file.writelines(lines)
-#
+
+
 def parse_images_file(file_path, points3d_dict):
     valid_data = {}
     with open(file_path, 'r') as file:
@@ -109,11 +113,7 @@ def parse_images_file(file_path, points3d_dict):
     return valid_data
 
 
-
-valid_data = parse_images_file(file_path_images, points3d_dict)
-
-
-def generate_test_data(valid_data, depth_file_path, radius_factor=0.2, num_samples=10):
+def generate_test_data(valid_data, depth_file_path,min_depth, max_depth, radius_factor=RADIUS, num_samples=DYNAMIC_MVNTS):
     """
     Generate test data adaptively around training data points using dynamic movements.6
     Parameters:
@@ -146,72 +146,45 @@ def generate_test_data(valid_data, depth_file_path, radius_factor=0.2, num_sampl
             for angle in angles
         ])
 
-        for image_name, data_points in valid_data.items():
-            input_data = []
-            output_data = []
-            test_data = []
+        
+        input_data = []
+        output_data = []
+        test_data = []
 
-            current_depth_image = depth_images[image_indices[image_name]]
-            image_height, image_width = current_depth_image.shape
-            for point in data_points:
-                x, y = int(point[0]), int(point[1])
-                if x < 0 or x >= image_width or y < 0 or y >= image_height:
-                    # Handle out-of-bounds case, skip or adjust
-                    continue
-                original_depth = current_depth_image[y, x]
-                input_data.append([x, y, original_depth])
-                output_data.append(point[2:])
+        current_depth_image = depth_images[image_indices[image_name]]
+        image_height, image_width = current_depth_image.shape
+        for point in data_points:
+            x, y = int(point[0]), int(point[1])
+            if x < 0 or x >= image_width or y < 0 or y >= image_height:
+                # Handle out-of-bounds case, skip or adjust
+                continue
+            original_depth = current_depth_image[y, x]
+            normalized_depth = (original_depth - min_depth) / (max_depth - min_depth)
+            input_data.append([x, y, normalized_depth])
+            output_data.append(point[2:])
 
-                # Generate test data around the point
-                for dx, dy in movements:
+            # Generate test data around the point
+            for dx, dy in movements:
 
-                    new_x, new_y = x + dx, y + dy
-                    if 0 <= new_x < image_width and 0 <= new_y < image_height:
-                        new_depth = current_depth_image[new_y, new_x]
-                        test_data.append([new_x, new_y, new_depth])
+                new_x, new_y = x + dx, y + dy
+                if 0 <= new_x < image_width and 0 <= new_y < image_height:
+                    new_depth = current_depth_image[new_y, new_x]
+                    normalized_new_depth = (new_depth - min_depth) / (max_depth - min_depth)
+                    test_data.append([new_x, new_y, normalized_new_depth])
 
-            input_data = np.array(input_data, dtype=float)
-            test_data = np.array(test_data, dtype=float)
-            input_data[:, 0] /= image_width  # Normalize x to [0, 1]
-            input_data[:, 1] /= image_height  # Normalize y to [0, 1]
-            test_data[:, 0] /= image_width
-            test_data[:, 1] /= image_height
-            data_by_image[image_name] = {
-                'input': input_data,
-                'output': np.array(output_data, dtype=float),
-                'test': test_data  # Store test data
-            }
+        input_data = np.array(input_data, dtype=float)
+        test_data = np.array(test_data, dtype=float)
+        input_data[:, 0] /= image_width  # Normalize x to [0, 1]
+        input_data[:, 1] /= image_height  # Normalize y to [0, 1]
+        test_data[:, 0] /= image_width
+        test_data[:, 1] /= image_height
+        data_by_image[image_name] = {
+            'input': input_data,
+            'output': np.array(output_data, dtype=float),
+            'test': test_data  # Store test data
+        }
 
-        return data_by_image
-
-
-
-#NEED TO MAKE THIS DYNAMIC 
-data_by_image_new = generate_test_data(valid_data,depth_file_path)
-test_data_normalized_new = data_by_image_new['000072.png']['test']
-predicted_var = np.load('/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/nerf_sythetic/ship/gp/72test_var.npy')[0]
-predicted_variance = np.array(predicted_var).reshape(-1, 6)
-
-r_var = predicted_variance[:, 3]
-g_var = predicted_variance[:, 4]
-b_var = predicted_variance[:, 5]
-rgb_mean = (r_var + g_var + b_var) / 3
-threshold = np.percentile(rgb_mean, 50)
-filtered_indices = rgb_mean <= threshold
-
-predict_mean = np.load('/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/nerf_sythetic/ship/gp/72mean.npy')[0]
-predict_mean = np.array(predict_mean).reshape(-1, 6)
-filtered_means = predict_mean[filtered_indices]
-filtered_xyz_rgb_mean = filtered_means
-
-print("Shape of test_data_normalized_new:", test_data_normalized_new.shape)
-print("Length of filtered_indices:", len(filtered_indices))
-
-
-test_data_normalized_new = test_data_normalized_new[filtered_indices]
-
-test_data_normalized_new = test_data_normalized_new
-print(len(test_data_normalized_new))
+    return data_by_image
 
 def recover_test_data(test_data_normalized, image_width, image_height, starting_point_id):
     # Revert normalization for x and y
@@ -233,23 +206,114 @@ def recover_test_data(test_data_normalized, image_width, image_height, starting_
 
     return recovered_data
 
-# Example usage
-image_width = 800
-image_height = 800
-starting_point_id = max_point_id + 1
-print("Starting point ID:", starting_point_id)
-test_data_recovered = recover_test_data(
-    test_data_normalized_new,
-    image_width,
-    image_height,
-    starting_point_id
-)
-test_data_recovered = test_data_recovered.astype(int)
-#print(test_data_recovered)
-predictions = {
-    "000072.png": [(int(row[0]), int(row[1]), int(row[2])) for row in test_data_recovered]
-}
+#Load Data and preprocess
+points3d_dict = load_points3D(file_path_points3d)
+valid_data = parse_images_file(file_path_images, points3d_dict)
 
-images_txt_path = "/home/staff/zhihao/Downloads/3dgs/mogp/gp_evaluation/nerf_sythetic/ship/sparse/0/images.txt"
+# Load depth images and compute global min/max depth
+depth_images = np.load(depth_file_path)
+image_indices = {name: idx for idx, name in enumerate(sorted(valid_data.keys()))}
+   
+all_depths = []
+for img_name, data_points in valid_data.items():
+    current_depth_image = depth_images[image_indices[img_name]]
+    img_height, img_width = current_depth_image.shape
+    for point in data_points:
+        x, y = int(point[0]), int(point[1])
+        if x < 0 or x >= img_width or y < 0 or y >= img_height:
+            continue
+        original_depth = current_depth_image[y, x]
+        all_depths.append(original_depth)
+   
+min_depth = np.min(all_depths)
+max_depth = np.max(all_depths)
+print(f"Depth range: {min_depth:.3f} to {max_depth:.3f}")
 
-update_images_txt_optimized(images_txt_path, predictions)
+#Load key four images 
+top_images_path = os.path.join(BASE_DIR,"top_four_images.json")
+with open(top_images_path, "r") as f:
+    top_image_names = json.load(f)
+
+#filter on the top 4 images
+valid_data = {k: v for k, v in valid_data.items() if k in top_image_names}
+
+
+# Generate test data with depth normalization
+data_by_image_new = generate_test_data(valid_data, depth_file_path, min_depth, max_depth)
+
+# Process all key images using the scene-level prediction files
+predictions = {}
+current_point_id = max_point_id + 1
+
+# Load predicted variance and mean for the entire scene
+predicted_var = np.load(TEST_VAR)[0]
+predicted_variance = np.array(predicted_var).reshape(-1, 6)
+
+# Filter by uncertainty
+r_var = predicted_variance[:, 3]
+g_var = predicted_variance[:, 4]
+b_var = predicted_variance[:, 5]
+rgb_mean = (r_var + g_var + b_var) / 3
+threshold = np.percentile(rgb_mean, 50)
+filtered_indices = rgb_mean <= threshold
+
+print(f"Total predicted points: {len(predicted_variance)}")
+print(f"Points after filtering: {np.sum(filtered_indices)}")
+
+# Process each key image
+for image_name in data_by_image_new.keys():
+    print(f"Processing image: {image_name}")
+    
+    # Get test data for this image
+    test_data_normalized = data_by_image_new[image_name]['test']
+    
+    # Apply the same filtering to this image's test data
+    # (assuming the test data order matches the prediction order)
+    if len(test_data_normalized) > 0:
+        # Get the corresponding slice of filtered indices for this image
+        # This assumes test data is processed in the same order as predictions
+        start_idx = sum(len(data_by_image_new[img]['test']) for img in sorted(data_by_image_new.keys()) if img < image_name)
+        end_idx = start_idx + len(test_data_normalized)
+        
+        # Get filtered test data for this image
+        image_filtered_indices = filtered_indices[start_idx:end_idx]
+        test_data_filtered = test_data_normalized[image_filtered_indices]
+        
+        print(f"  Original test points: {len(test_data_normalized)}")
+        print(f"  Filtered test points: {len(test_data_filtered)}")
+        
+        if len(test_data_filtered) == 0:
+            print(f"  No points remaining after filtering for {image_name}, skipping...")
+            continue
+        
+        # Get image dimensions for denormalization
+        image_idx = image_indices[image_name]
+        current_depth_image = depth_images[image_idx]
+        image_height, image_width = current_depth_image.shape
+        
+        # Recover test data (denormalize and assign point IDs)
+        test_data_recovered = recover_test_data(
+            test_data_filtered,
+            image_width,
+            image_height,
+            current_point_id
+        )
+        test_data_recovered = test_data_recovered.astype(int)
+        
+        # Add to predictions dictionary
+        predictions[image_name] = [(int(row[0]), int(row[1]), int(row[2])) for row in test_data_recovered]
+        
+        # Update point ID counter
+        current_point_id += len(test_data_recovered)
+        
+        print(f"  Added {len(test_data_recovered)} new correspondences for {image_name}")
+    else:
+        print(f"  No test data for {image_name}, skipping...")
+
+# Update images.txt with all new correspondences
+images_txt_path = IMAGES_TXT_PATH
+if predictions:
+    update_images_txt_optimized(images_txt_path, predictions)
+    print(f"Updated {len(predictions)} images with new correspondences")
+else:
+    print("No predictions to write - all images were skipped or had no valid points after filtering")
