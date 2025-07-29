@@ -193,7 +193,7 @@ train_input = torch.tensor(train_input, dtype=torch.float32)
 train_output = torch.tensor(train_output, dtype=torch.float32)
 
 # Dynamically sample new test pixels for densification
-# (use your generate_test_data function with a larger radius or more samples if desired)
+# (use  generate_test_data function with a larger radius or more samples if desired)
 densified_test_inputs = []
 for img_name in top_images_names:
     densified_test_inputs.append(data_by_image_new[img_name]['test'])  # 'test' is the dynamically sampled pixels

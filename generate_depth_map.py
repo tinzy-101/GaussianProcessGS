@@ -33,8 +33,10 @@ else:
     )
 
 # 1) HF pipeline (device auto)
-pipe = pipeline(task="depth-estimation", model="depth-anything/Depth-Anything-V2-Large-hf")
-DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
+#pipe = pipeline(task="depth-estimation", model="depth-anything/Depth-Anything-V2-Large-hf")
+#DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
+pipe = pipeline(task="depth-estimation", model="depth-anything/Depth-Anything-V2-Large-hf", device=-1)
+DEVICE = torch.device("cpu")
 
 model_configs = {
     'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
