@@ -1,4 +1,8 @@
 import torch
+
+DTYPE = torch.float64
+
+torch.set_default_dtype(DTYPE)
 import gpytorch
 from gpytorch.means import ConstantMean
 from gpytorch.kernels import RBFKernel, ScaleKernel, MaternKernel
@@ -29,10 +33,44 @@ LEARNING_RATE = 0.1
 WEIGHT_DECAY =1e-6 
 NU = 0.5
 
-# Load and prepare data
+# Load and prepare data and file paths
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 file_path_points3d = POINTS3D_PATH
 depth_file_path = DEPTH_FILE_PATH
+file_path_images = IMAGES_TXT_PATH
+#Functions added from mogp_train
+def load_image_order_from_txt(images_txt_path):
+    order = []
+    with open(images_txt_path) as f:
+        for ln in f:
+            ln = ln.strip()
+            if not ln or ln.startswith('#'): 
+                continue
+            p = ln.split()
+            if p[0].isdigit() and len(p) >= 10:
+                order.append(p[9])
+    return order
+
+def load_stack_order(depth_file_path, fallback_images_txt):
+    # Prefer the explicit list you wrote when stacking f.npy
+    dir_depth = os.path.dirname(depth_file_path)
+    order_file = os.path.join(dir_depth, "image_list_colmap.txt")
+    if os.path.exists(order_file):
+        with open(order_file) as f:
+            return [ln.strip() for ln in f if ln.strip()]
+    # Fallback: parse images.txt (in-file order)
+    return load_image_order_from_txt(fallback_images_txt)
+
+
+def collapse_depth_2d(D):
+    """D: [H,W] or [H,W,C] -> [H,W] float32."""
+    if D.ndim == 2:
+        return D.astype(np.float32)
+    # use luminance of first 3 channels; ignore alpha if present
+    if D.shape[2] >= 3:
+        w = np.array([0.299, 0.587, 0.114], dtype=np.float32)
+        return (D[..., :3].astype(np.float32) @ w).astype(np.float32)
+    return D[..., 0].astype(np.float32)
 
 # Load points3D from file
 def load_points3D(file_path):
@@ -48,7 +86,7 @@ def load_points3D(file_path):
             points3d_dict[point_id] = [x, y, z, r / 255.0, g / 255.0, b / 255.0]
     return points3d_dict
 
-points3d_dict = load_points3D(file_path_points3d)
+
 
 # Parse images file
 def parse_images_file(file_path, points3d_dict):
@@ -79,127 +117,155 @@ def parse_images_file(file_path, points3d_dict):
 
     return valid_data
 
-file_path_images = IMAGES_TXT_PATH
-valid_data = parse_images_file(file_path_images, points3d_dict)
 
 
-def generate_test_data(valid_data, depth_file_path, radius_factor=RADIUS, num_samples=DYNAMIC_MVNTS):
-    """
-    Generate test data adaptively around training data points using dynamic movements.
 
-    Parameters:
-    - valid_data (dict): Dictionary of image names and training points.
-    - depth_file_path (str): Path to the depth images (NumPy file).
-    - radius_factor (float): Fraction of the image size used to define movement radius.
-    - num_samples (int): Number of dynamic movements (directions) to sample around each point.
 
-    Returns:
-    - data_by_image (dict): Dictionary containing input, output, and test data for each image.
-    """
-    # Load depth images and precompute image dimensions
-    depth_images = np.load(depth_file_path)
-    print(len(depth_images))
-    image_indices = {name: idx for idx, name in enumerate(sorted(valid_data.keys()))}
+def generate_test_data(valid_data, depth_file_path, min_depth, max_depth,
+                       radius_factor=RADIUS, num_samples=DYNAMIC_MVNTS):
+    depth_images = np.load(depth_file_path)                # [N,H,W] or [N,H,W,C]
+    print("depth stack shape:", depth_images.shape)
+
+    ordered_names = load_stack_order(depth_file_path, IMAGES_TXT_PATH)
+    image_indices = {name: i for i, name in enumerate(ordered_names)}
 
     data_by_image = {}
 
     for image_name, data_points in valid_data.items():
-        # Pre-fetch depth image and dimensions
-        current_depth_image = depth_images[image_indices[image_name]]
-        image_height, image_width = current_depth_image.shape
+        if image_name not in image_indices:
+            # name mismatch (e.g., case/relative path) → skip safely
+            continue
 
-        # Calculate adaptive radius based on image dimensions
-        adaptive_radius = int(radius_factor * min(image_height, image_width))
+        D = depth_images[image_indices[image_name]]
+        # Collapse multi-channel → single channel float32
+        if D.ndim == 3:
+            h, w, c = D.shape
+            if c >= 3:
+                weights = np.array([0.299, 0.587, 0.114], dtype=np.float32)
+                D = (D[..., :3].astype(np.float32) @ weights).astype(np.float32)
+            else:
+                D = D[..., 0].astype(np.float32)
+        else:
+            D = D.astype(np.float32)
 
-        # Generate dynamic movements using polar coordinates
-        angles = np.linspace(0, 2 * np.pi, num_samples, endpoint=False)
-        movements = np.array([
-            (int(adaptive_radius * np.cos(angle)), int(adaptive_radius * np.sin(angle)))
-            for angle in angles
-        ])
+        H, W = D.shape
+        # dynamic radius and movement set
+        r = int(radius_factor * min(H, W))
+        angles = np.linspace(0, 2*np.pi, num_samples, endpoint=False)
+        movements = [(int(r*np.cos(a)), int(r*np.sin(a))) for a in angles]
 
-        for image_name, data_points in valid_data.items():
-            input_data = []
-            output_data = []
-            test_data = []
+        input_data, output_data, test_data = [], [], []
+        for p in data_points:
+            x, y = int(round(p[0])), int(round(p[1]))
+            if not (0 <= x < W and 0 <= y < H):
+                continue
+            d = float(D[y, x])
+            # normalize depth globally (same min/max you computed)
+            nd = (d - min_depth) / (max_depth - min_depth + 1e-12)
+            input_data.append([x / W, y / H, nd])      # normalized here
+            output_data.append(p[2:])                  # (X,Y,Z,R,G,B)
 
-            current_depth_image = depth_images[image_indices[image_name]]
-            image_height, image_width = current_depth_image.shape
-            for point in data_points:
-                x, y = int(point[0]), int(point[1])
-                if x < 0 or x >= image_width or y < 0 or y >= image_height:
-                    # Handle out-of-bounds case, skip or adjust
-                    continue
-                original_depth = current_depth_image[y, x]
-                input_data.append([x, y, original_depth])
-                output_data.append(point[2:])
+            # test samples (not used for ranking, but keep correct indexing)
+            for dx, dy in movements:
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < W and 0 <= ny < H:
+                    nd2 = (float(D[ny, nx]) - min_depth) / (max_depth - min_depth + 1e-12)
+                    test_data.append([nx / W, ny / H, nd2])
 
-                # Generate test data around the point
-                for dx, dy in movements:
+        data_by_image[image_name] = {
+            'input':  np.asarray(input_data,  dtype=float),   # (N,3)
+            'output': np.asarray(output_data, dtype=float),   # (N,6)
+            'test':   np.asarray(test_data,   dtype=float),   # (M,3)
+        }
+    return data_by_image
 
-                    new_x, new_y = x + dx, y + dy
-                    if 0 <= new_x < image_width and 0 <= new_y < image_height:
-                        new_depth = current_depth_image[new_y, new_x]
-                        test_data.append([new_x, new_y, new_depth])
 
-            input_data = np.array(input_data, dtype=float)
-            test_data = np.array(test_data, dtype=float)
-            input_data[:, 0] /= image_width  # Normalize x to [0, 1]
-            input_data[:, 1] /= image_height  # Normalize y to [0, 1]
-            test_data[:, 0] /= image_width
-            test_data[:, 1] /= image_height
-            data_by_image[image_name] = {
-                'input': input_data,
-                'output': np.array(output_data, dtype=float),
-                'test': test_data  # Store test data
-            }
+#Load and Preprocess data
+points3d_dict = load_points3D(file_path_points3d)
+valid_data = parse_images_file(file_path_images, points3d_dict)
 
-        return data_by_image
+#Load Depth images and normalize
+depth_images = np.load(depth_file_path)
+ordered_names = load_stack_order(depth_file_path, file_path_images)
+image_indices = {name: i for i, name in enumerate(ordered_names)}
 
-# Load key four images 
-top_images_path = os.path.join(BASE_DIR, "top_four_images.json")
-with open(top_images_path, "r") as f:
-    top_images_names = json.load(f)
+all_depths =[]
 
-#Filter the top 4 imgs
-valid_data ={k: v for k, v in valid_data.items() if k in top_images_names}
-print(f"Using {len(valid_data)} key frames:{list(valid_data.keys())}")
+for img_name, data_points in valid_data.items():
+    D = depth_images[image_indices[img_name]]     # slice for this view
+    current_depth_image = collapse_depth_2d(D)      # ensure [H,W] float32
+    img_height, img_width = current_depth_image.shape
+    for point in data_points:
+        x,y = int(point[0]), int(point[1])
+        if x < 0 or x >= img_width or y<0 or y>= img_height:
+            continue
+        original_depth = current_depth_image[y,x]
+        all_depths.append(original_depth)
 
-data_by_image_new = generate_test_data(valid_data, depth_file_path)
+min_depth = np.min(all_depths)
+max_depth = np.max(all_depths) 
 
-#Stack input and output data from all 4 img
-all_input_data=[]
-all_output_data = []
+#Load key four images 
+# top_images_path = os.path.join(BASE_DIR,"top_four_images.json")
+# with open(top_images_path, "r") as f:
+#     top_image_names = json.load(f)
 
-for img_name in top_images_names:
-    if img_name in data_by_image_new:
+
+#images = ["000115.JPG", "000101.JPG", "000079.JPG", "000072.JPG"]
+images = ["000115.JPG"]
+
+
+
+for image_name in images:
+    print(f"Processing image: {image_name}")
+    top_image_names = [image_name]
+
+    print(f"Selected images: {top_image_names}")
+
+    #filter on the top 4 images
+    valid_data_ = {k: v for k, v in valid_data.items() if k in top_image_names}
+
+    #Generate input/ouput/test sets
+    data_by_image_new = generate_test_data(valid_data_, depth_file_path, min_depth,max_depth)
+
+    print(data_by_image_new.keys())
+
+
+    # Stack input and output data from the selected images
+    all_input_data = []
+    all_output_data = []
+
+
+
+    for img_name in top_image_names:
+        print(f"Inner loop: Processing image: {img_name}")
         all_input_data.append(data_by_image_new[img_name]['input'])
         all_output_data.append(data_by_image_new[img_name]['output'])
 
-all_input_data= np.vstack(all_input_data)
-all_output_data= np.vstack(all_output_data)
+    all_input_data = np.vstack(all_input_data)
+    all_output_data = np.vstack(all_output_data)
 
-#Normalize input and output
-input_data_normalized = all_input_data
-scaler_output = MinMaxScaler().fit(all_output_data)
-output_data_normalized = scaler_output.transform(all_output_data)
+    # Normalize input and output
+    input_data_normalized = all_input_data
+    scaler_output = MinMaxScaler().fit(all_output_data)
+    output_data_normalized = scaler_output.transform(all_output_data)
 
+    # Split data into train and test sets
+    train_input, test_input, train_output, test_output = train_test_split(input_data_normalized, output_data_normalized, test_size=TEST_SIZE, random_state=RANDOM_STATE)
+    train_input = torch.tensor(train_input, dtype=DTYPE)
+    train_output = torch.tensor(train_output, dtype=DTYPE)
+    test_input = torch.tensor(test_input, dtype=DTYPE)
+    test_output = torch.tensor(test_output, dtype=DTYPE)
 
-# Split data for training only (do not use test split for prediction)
-train_input, _, train_output, _ = train_test_split(
-    input_data_normalized, output_data_normalized, test_size=TEST_SIZE, random_state=RANDOM_STATE
-)
-train_input = torch.tensor(train_input, dtype=torch.float32)
-train_output = torch.tensor(train_output, dtype=torch.float32)
 
 # Dynamically sample new test pixels for densification
 # (use  generate_test_data function with a larger radius or more samples if desired)
 densified_test_inputs = []
-for img_name in top_images_names:
+for img_name in images:
     densified_test_inputs.append(data_by_image_new[img_name]['test'])  # 'test' is the dynamically sampled pixels
 
 densified_test_inputs = np.vstack(densified_test_inputs)
-test_input = torch.tensor(densified_test_inputs, dtype=torch.float32)
+test_input = torch.tensor(densified_test_inputs, dtype=DTYPE)
 
 
 # Define the Multi-Task GP model

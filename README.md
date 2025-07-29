@@ -95,7 +95,7 @@ To get the top four key frames of a scene (other then flowers):
 python -m MOGP.mogp_train (trains model and saves to gp folder in scene folder/ gives R^2 RMSE and CD)  
 python -m MOGP.predict  
 python -m MOGP.vis_var  
-python -m rewrite_images_sfm (still being edited)  
+python -m rewrite_images_sfm 
 python =m write_points3d (still being edited)  
 ```
 
