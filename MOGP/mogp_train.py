@@ -215,7 +215,7 @@ max_depth = np.max(all_depths)
 
 
 #images = ["000115.JPG", "000101.JPG", "000079.JPG", "000072.JPG"]
-images = ["000115.JPG"]
+images = ["000007.JPG"]
 
 
 
