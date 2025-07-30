@@ -38,7 +38,7 @@ RANDOM_STATE = 42
 NUM_EPOCHS = 1000
 #BATCH_SIZE = 32
 NUM_TASKS = 6
-RANK = 3
+RANK = 4
 NUM_INDUCING = 200
 LR = 0.2
 WEIGHT_DECAY =1e-6 
@@ -204,7 +204,11 @@ image_indices = {name: i for i, name in enumerate(ordered_names)}
 
 all_depths =[]
 
+#print(f"image_indices:{image_indices.shape}")
+print(f"depth_images:{depth_images.shape}")
 for img_name, data_points in valid_data.items():
+    # print(f"img_name:{img_name}")
+    # print(f"indexing depth_images:{image_indices[img_name]}")
     D = depth_images[image_indices[img_name]]     # slice for this view
     current_depth_image = collapse_depth_2d(D)      # ensure [H,W] float32
     img_height, img_width = current_depth_image.shape
@@ -225,7 +229,8 @@ max_depth = np.max(all_depths)
 
 
 #images = ["000115.JPG", "000101.JPG", "000079.JPG", "000072.JPG"]
-images = ["000007.JPG"]
+#images = ["000007.JPG"] # bonsai
+images = ["000115.JPG"] # flowers
 
 
 
@@ -287,52 +292,105 @@ for image_name in images:
     print(f"test in:{test_input.shape}")
     print(f"test out:{test_output.shape}")
 
-    
-    class MultitaskGPModel(gpytorch.models.ApproximateGP):
-        def __init__(self, inducing_points, base_kernels, rank, num_tasks): #same Z for each latent function
+    ### ------------------LCM (Dependent) Variational-------------------------###
+
+    # class VariationalMultitaskGPModel(gpytorch.models.ApproximateGP):
+    #     def __init__(self, inducing_points, base_kernels, rank, num_tasks): #same Z for each latent function
             
-            variational_distribution = gpytorch.variational.CholeskyVariationalDistribution(
-                    inducing_points.size(-2), batch_shape=torch.Size([rank]))
+    #         variational_distribution = gpytorch.variational.CholeskyVariationalDistribution(
+    #                 inducing_points.size(-2), batch_shape=torch.Size([rank]))
 
-            variational_strategy = gpytorch.variational.LMCVariationalStrategy(
-                gpytorch.variational.VariationalStrategy(
-                    self, inducing_points, variational_distribution, learn_inducing_locations=True
-                ),
-                num_tasks=num_tasks,
-                num_latents=rank,
-                latent_dim=-1
+    #         variational_strategy = gpytorch.variational.LMCVariationalStrategy(
+    #             gpytorch.variational.VariationalStrategy(
+    #                 self, inducing_points, variational_distribution, learn_inducing_locations=True
+    #             ),
+    #             num_tasks=num_tasks,
+    #             num_latents=rank,
+    #             latent_dim=-1
+    #         )
+
+    #         super().__init__(variational_strategy)
+    #         # add constraint to inducing points, needed for splatting 
+    #         #self.variational_strategy.register_constraint("inducing_points", Interval(0.0,1.0))
+
+    #         self.mean_module = gpytorch.means.ConstantMean(batch_shape=torch.Size([rank]))
+    #         self.covar_module = gpytorch.kernels.ScaleKernel(
+    #             gpytorch.kernels.RBFKernel(batch_shape=torch.Size([rank])),
+    #             batch_shape=torch.Size([rank])
+    #         )
+
+    #     def forward(self, x: torch.Tensor):
+    #         mean_x = self.mean_module(x)
+    #         covar_x = self.covar_module(x)
+    #         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+
+
+    ### -------------------Independent Variational-----------------------###
+
+    # class IndependentMultitaskGPModel(gpytorch.models.ApproximateGP):
+    #     def __init__(self, inducing_points, num_tasks): #same Z for each latent function
+            
+    #         variational_distribution = gpytorch.variational.CholeskyVariationalDistribution(
+    #                 inducing_points.size(-2), batch_shape=torch.Size([num_tasks]))
+
+    #         variational_strategy = gpytorch.variational.IndependentMultitaskVariationalStrategy(
+    #             gpytorch.variational.VariationalStrategy(
+    #                 self, inducing_points, variational_distribution, learn_inducing_locations=True
+    #             ),
+    #             num_tasks=num_tasks,
+    #         )
+
+    #         super().__init__(variational_strategy)
+    #         # add constraint to inducing points, needed for splatting 
+    #         #self.variational_strategy.register_constraint("inducing_points", Interval(0.0,1.0))
+
+    #         self.mean_module = gpytorch.means.ConstantMean(batch_shape=torch.Size([num_tasks]))
+    #         self.covar_module = gpytorch.kernels.ScaleKernel(
+    #             gpytorch.kernels.RBFKernel(batch_shape=torch.Size([num_tasks])),
+    #             batch_shape=torch.Size([num_tasks])
+    #         )
+
+    #     def forward(self, x: torch.Tensor):
+    #         mean_x = self.mean_module(x)
+    #         covar_x = self.covar_module(x)
+    #         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+
+
+    ###-------------------LCM (Dependent) Nonvariational-------------------###
+    class LCMMultiTaskGPModel(gpytorch.models.ExactGP):
+        def __init__(self, train_x, train_y, likelihood, base_kernels, num_tasks):
+
+            super().__init__(train_x, train_y, likelihood)
+            self.mean_module = gpytorch.means.MultitaskMean(ConstantMean(), num_tasks=num_tasks)
+
+            self.covar_module = ScaleKernel(
+                gpytorch.kernels.LCMKernel(base_kernels=base_kernels, num_tasks=num_tasks)
             )
 
-            super().__init__(variational_strategy)
-            # add constraint to inducing points, needed for splatting 
-            #self.variational_strategy.register_constraint("inducing_points", Interval(0.0,1.0))
-
-            self.mean_module = gpytorch.means.ConstantMean(batch_shape=torch.Size([rank]))
-            self.covar_module = gpytorch.kernels.ScaleKernel(
-                gpytorch.kernels.RBFKernel(batch_shape=torch.Size([rank])),
-                batch_shape=torch.Size([rank])
-            )
-
-        def forward(self, x: torch.Tensor):
+        def forward(self, x):
             mean_x = self.mean_module(x)
             covar_x = self.covar_module(x)
-            return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+            return MultitaskMultivariateNormal(mean_x, covar_x)
+    
 
     train_start = time.time()
     Z = farthest_point_sampling(train_input, NUM_INDUCING)
-    base_kernels = [MaternKernel(nu=NU),MaternKernel(nu=NU),MaternKernel(nu=NU)]
+    base_kernels = [MaternKernel(nu=NU),MaternKernel(nu=NU),MaternKernel(nu=NU),MaternKernel(nu=NU)]
 
-    model = MultitaskGPModel(Z, base_kernels, RANK, NUM_TASKS)
     likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=NUM_TASKS)
+    model = LCMMultiTaskGPModel(train_input, train_output, likelihood, base_kernels, NUM_TASKS)
 
     model.train()
     likelihood.train()
 
-    optimizer = torch.optim.Adam([
-        {'params': model.parameters()},
-        {'params': likelihood.parameters()},], lr=0.1)
+    # optimizer = torch.optim.Adam([ #--> for LCM var, indep var
+    #     {'params': model.parameters()},
+    #     {'params': likelihood.parameters()},], lr=0.1)
+    optimizer = torch.optim.Adagrad(model.parameters(), lr=LR) #--> for LCM nonvar
 
-    mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=train_output.size(0))
+
+    #mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=train_output.size(0)) #--> for LCM var, indep var
+    mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model) #--> for LCM nonvar
 
     losses = []
     epochs_iter = tqdm(range(NUM_EPOCHS), desc="Epoch")
@@ -344,7 +402,7 @@ for image_name in images:
         losses.append(loss)
         loss.backward()
         optimizer.step()
-        print('Iter %d/%d - Loss: %.3f' % (i + 1, NUM_EPOCHS, loss.item()))
+        #print('Iter %d/%d - Loss: %.3f' % (i + 1, NUM_EPOCHS, loss.item()))
     
     train_end = time.time()
 

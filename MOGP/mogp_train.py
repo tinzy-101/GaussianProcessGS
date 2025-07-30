@@ -1,5 +1,5 @@
 import torch
-
+import time 
 DTYPE = torch.float64
 
 torch.set_default_dtype(DTYPE)
@@ -215,7 +215,10 @@ max_depth = np.max(all_depths)
 
 
 #images = ["000115.JPG", "000101.JPG", "000079.JPG", "000072.JPG"]
-images = ["000007.JPG"]
+#images = ["000007.JPG"] # bonsai
+images = ["000115.JPG"] # flowers
+
+
 
 
 
@@ -300,6 +303,7 @@ for image_name in images:
 
 
     # Training
+    train_start = time.time()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     likelihood = MultitaskGaussianLikelihood(num_tasks=6).to(device)
     model = MultiTaskGPModel(train_input.to(device), train_output.to(device), likelihood, num_tasks=NUM_TASKS).to(device)
@@ -318,7 +322,7 @@ for image_name in images:
         loss.backward()
         optimizer.step()
         #print(f'Iteration {i + 1}/{TRAINING_ITERATIONS}, Loss: {loss.item()}')
-
+    train_end = time.time()
 
     #Save the output
     torch.save(model.state_dict(), os.path.join(GP_OUTPUT_DIR, f"{SCENE_NAME}.pth"))
@@ -356,3 +360,6 @@ for image_name in images:
     rng.shuffle(shuf, axis=0)
     r2_shuf = r2_score(shuf, mean_prediction)
     print("R² with shuffled truths (should be << 0):", r2_shuf)
+
+    train_time = train_end - train_start
+    print(f"\nTraining time: {train_time:.2f} seconds")
