@@ -3,19 +3,24 @@ import torch
 DTYPE = torch.float64
 
 torch.set_default_dtype(DTYPE)
-import time
+
 import os
 import json
 import gpytorch
+import time
 from gpytorch.means import ConstantMean
+from torch.utils.data import TensorDataset, DataLoader
 from gpytorch.kernels import RBFKernel, ScaleKernel, MaternKernel
 from gpytorch.likelihoods import MultitaskGaussianLikelihood
 from gpytorch.distributions import MultitaskMultivariateNormal, MultivariateNormal
+from gpytorch.kernels import LCMKernel
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_squared_error
 import numpy as np
+import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm  # Import tqdm for progress bar
+from typing import List 
 
 
 from config import (
@@ -29,12 +34,16 @@ RADIUS = 0.25
 DYNAMIC_MVNTS = 8
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
-TRAINING_ITERATIONS = 1000
+#TRAINING_ITERATIONS = 100
+NUM_EPOCHS = 1000
+#BATCH_SIZE = 32
 NUM_TASKS = 6
-LEARNING_RATE = 0.2
+RANK = 4
+NUM_INDUCING = 200
+LR = 0.2
 WEIGHT_DECAY =1e-6 
 NU = 0.5
-images = ["000079.JPG"]
+images = ["000079.JPG"] 
 
 #Set up output directory if it doesn't exist
 GP_OUTPUT_DIR = os.path.join(BASE_DIR, "gp")
@@ -195,7 +204,11 @@ image_indices = {name: i for i, name in enumerate(ordered_names)}
 
 all_depths =[]
 
+#print(f"image_indices:{image_indices.shape}")
+print(f"depth_images:{depth_images.shape}")
 for img_name, data_points in valid_data.items():
+    # print(f"img_name:{img_name}")
+    # print(f"indexing depth_images:{image_indices[img_name]}")
     D = depth_images[image_indices[img_name]]     # slice for this view
     current_depth_image = collapse_depth_2d(D)      # ensure [H,W] float32
     img_height, img_width = current_depth_image.shape
@@ -216,7 +229,8 @@ max_depth = np.max(all_depths)
 
 
 #images = ["000115.JPG", "000101.JPG", "000079.JPG", "000072.JPG"]
-
+#images = ["000007.JPG"] # bonsai
+# flowers
 
 
 
@@ -261,29 +275,136 @@ for image_name in images:
     test_input = torch.tensor(test_input, dtype=DTYPE)
     test_output = torch.tensor(test_output, dtype=DTYPE)
 
-    import pandas as pd
-    train_x_df = pd.DataFrame(train_input)
-    print(train_x_df.describe())
-    train_y_df = pd.DataFrame(train_output)
-    print(train_y_df.describe())
 
-    class MultiTaskGPModel(gpytorch.models.ExactGP):
-        def __init__(self, train_x, train_y, likelihood, num_tasks):
-            super(MultiTaskGPModel, self).__init__(train_x, train_y, likelihood)
-            self.mean_module = ConstantMean(batch_shape=torch.Size([num_tasks]))
+    def farthest_point_sampling(train_x, num_inducing):
+        inducing_points = [train_x[0]]
+        distances = torch.cdist(train_x, inducing_points[0].unsqueeze(0)).squeeze()
+        for _ in range(1, num_inducing):
+            idx = torch.argmax(distances)
+            new_point = train_x[idx]
+            inducing_points.append(new_point)
+            new_dists = torch.cdist(train_x, new_point.unsqueeze(0)).squeeze()
+            distances = torch.minimum(distances, new_dists)
+        return torch.stack(inducing_points)
+    
+    print(f"train in:{train_input.shape}")
+    print(f"train out:{train_output.shape}")
+    print(f"test in:{test_input.shape}")
+    print(f"test out:{test_output.shape}")
+
+    ### ------------------LCM (Dependent) Variational-------------------------###
+
+    # class VariationalMultitaskGPModel(gpytorch.models.ApproximateGP):
+    #     def __init__(self, inducing_points, base_kernels, rank, num_tasks): #same Z for each latent function
+            
+    #         variational_distribution = gpytorch.variational.CholeskyVariationalDistribution(
+    #                 inducing_points.size(-2), batch_shape=torch.Size([rank]))
+
+    #         variational_strategy = gpytorch.variational.LMCVariationalStrategy(
+    #             gpytorch.variational.VariationalStrategy(
+    #                 self, inducing_points, variational_distribution, learn_inducing_locations=True
+    #             ),
+    #             num_tasks=num_tasks,
+    #             num_latents=rank,
+    #             latent_dim=-1
+    #         )
+
+    #         super().__init__(variational_strategy)
+    #         # add constraint to inducing points, needed for splatting 
+    #         #self.variational_strategy.register_constraint("inducing_points", Interval(0.0,1.0))
+
+    #         self.mean_module = gpytorch.means.ConstantMean(batch_shape=torch.Size([rank]))
+    #         self.covar_module = gpytorch.kernels.ScaleKernel(
+    #             gpytorch.kernels.RBFKernel(batch_shape=torch.Size([rank])),
+    #             batch_shape=torch.Size([rank])
+    #         )
+
+    #     def forward(self, x: torch.Tensor):
+    #         mean_x = self.mean_module(x)
+    #         covar_x = self.covar_module(x)
+    #         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+
+
+    ### -------------------Independent Variational-----------------------###
+
+    # class IndependentMultitaskGPModel(gpytorch.models.ApproximateGP):
+    #     def __init__(self, inducing_points, num_tasks): #same Z for each latent function
+            
+    #         variational_distribution = gpytorch.variational.CholeskyVariationalDistribution(
+    #                 inducing_points.size(-2), batch_shape=torch.Size([num_tasks]))
+
+    #         variational_strategy = gpytorch.variational.IndependentMultitaskVariationalStrategy(
+    #             gpytorch.variational.VariationalStrategy(
+    #                 self, inducing_points, variational_distribution, learn_inducing_locations=True
+    #             ),
+    #             num_tasks=num_tasks,
+    #         )
+
+    #         super().__init__(variational_strategy)
+    #         # add constraint to inducing points, needed for splatting 
+    #         #self.variational_strategy.register_constraint("inducing_points", Interval(0.0,1.0))
+
+    #         self.mean_module = gpytorch.means.ConstantMean(batch_shape=torch.Size([num_tasks]))
+    #         self.covar_module = gpytorch.kernels.ScaleKernel(
+    #             gpytorch.kernels.RBFKernel(batch_shape=torch.Size([num_tasks])),
+    #             batch_shape=torch.Size([num_tasks])
+    #         )
+
+    #     def forward(self, x: torch.Tensor):
+    #         mean_x = self.mean_module(x)
+    #         covar_x = self.covar_module(x)
+    #         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+
+
+    ###-------------------LCM (Dependent) Nonvariational-------------------###
+    class LCMMultiTaskGPModel(gpytorch.models.ExactGP):
+        def __init__(self, train_x, train_y, likelihood, base_kernels, num_tasks):
+
+            super().__init__(train_x, train_y, likelihood)
+            self.mean_module = gpytorch.means.MultitaskMean(ConstantMean(), num_tasks=num_tasks)
 
             self.covar_module = ScaleKernel(
-                MaternKernel(nu=NU, batch_shape=torch.Size([num_tasks])),
-                batch_shape=torch.Size([num_tasks])
+                gpytorch.kernels.LCMKernel(base_kernels=base_kernels, num_tasks=num_tasks)
             )
-
-
-
 
         def forward(self, x):
             mean_x = self.mean_module(x)
             covar_x = self.covar_module(x)
-            return MultitaskMultivariateNormal.from_batch_mvn(MultivariateNormal(mean_x, covar_x))
+            return MultitaskMultivariateNormal(mean_x, covar_x)
+    
+
+    train_start = time.time()
+    Z = farthest_point_sampling(train_input, NUM_INDUCING)
+    base_kernels = [MaternKernel(nu=NU),MaternKernel(nu=NU),MaternKernel(nu=NU),MaternKernel(nu=NU)]
+
+    likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=NUM_TASKS)
+    model = LCMMultiTaskGPModel(train_input, train_output, likelihood, base_kernels, NUM_TASKS)
+
+    model.train()
+    likelihood.train()
+
+    # optimizer = torch.optim.Adam([ #--> for LCM var, indep var
+    #     {'params': model.parameters()},
+    #     {'params': likelihood.parameters()},], lr=0.1)
+    optimizer = torch.optim.Adagrad(model.parameters(), lr=LR) #--> for LCM nonvar
+
+
+    #mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=train_output.size(0)) #--> for LCM var, indep var
+    mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model) #--> for LCM nonvar
+
+    losses = []
+    epochs_iter = tqdm(range(NUM_EPOCHS), desc="Epoch")
+    for i in epochs_iter:
+        # Within each iteration, we will go over each minibatch of data
+        optimizer.zero_grad()
+        output = model(train_input)
+        loss = -mll(output, train_output)
+        losses.append(loss)
+        loss.backward()
+        optimizer.step()
+        #print('Iter %d/%d - Loss: %.3f' % (i + 1, NUM_EPOCHS, loss.item()))
+    
+    train_end = time.time()
 
 
     def chamfer_distance(pred_points, true_points):
@@ -298,47 +419,26 @@ for image_name in images:
         backward_cd = torch.mean(torch.min(distances, dim=0)[0])
 
         return forward_cd + backward_cd
+    
 
-
-    # Training
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    likelihood = MultitaskGaussianLikelihood(num_tasks=6).to(device)
-    model = MultiTaskGPModel(train_input.to(device), train_output.to(device), likelihood, num_tasks=NUM_TASKS).to(device)
-    #optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-    optimizer = torch.optim.Adagrad(model.parameters(), lr=LEARNING_RATE)#, weight_decay=WEIGHT_DECAY)
-    mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
-
-    losses = []
-    model.train()
-    likelihood.train()
-
-    train_start = time.time()
-    for i in tqdm(range(TRAINING_ITERATIONS)):
-        optimizer.zero_grad()
-        output = model(train_input.to(device))
-        loss = -mll(output, train_output.to(device))
-        losses.append(loss.item())
-        loss.backward()
-        optimizer.step()
-        #print(f'Iteration {i + 1}/{TRAINING_ITERATIONS}, Loss: {loss.item()}')
-
-    train_end = time.time()
 
     #Save the output
     torch.save(model.state_dict(), os.path.join(GP_OUTPUT_DIR, f"{SCENE_NAME}.pth"))
     torch.save(likelihood.state_dict(), os.path.join(GP_OUTPUT_DIR, f"{SCENE_NAME}likelihood.pth"))
-    np.save(os.path.join(GP_OUTPUT_DIR, f"{SCENE_NAME}.npy"), np.array(losses))
+    np.save(os.path.join(GP_OUTPUT_DIR, f"{SCENE_NAME}.npy"), np.array([l.detach().cpu().numpy() for l in losses]))
 
 
-    # Evaluation
+    # making predictions
     model.eval()
     likelihood.eval()
-
     with torch.no_grad(), gpytorch.settings.fast_pred_var():
         test_output_pred = model(test_input.to(device))
         mean_prediction = test_output_pred.mean.cpu().numpy()
         true_output = test_output.cpu().numpy()
 
+    print(f"trud output:{true_output.shape}")
+    print(f"mean pred:{mean_prediction.shape}")
 
     r2 = r2_score(true_output, mean_prediction)
     rmse = np.sqrt(mean_squared_error(true_output, mean_prediction))
@@ -360,5 +460,6 @@ for image_name in images:
     rng.shuffle(shuf, axis=0)
     r2_shuf = r2_score(shuf, mean_prediction)
     print("R² with shuffled truths (should be << 0):", r2_shuf)
+
     train_time = train_end - train_start
     print(f"\nTraining time: {train_time:.2f} seconds")
