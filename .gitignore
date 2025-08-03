@@ -1,2 +1,9 @@
 mipnerf360/flowers/depth/f.npy
 checkpoints/depth_anything_v2_vitl.pth
+mipnerf360/*/depth/
+!mipnerf360/*/gp/var_figure/
+!mipnerf360/*/gp/var_figure/*
+
+mipnerf360/*/gp/*
+!mipnerf360/*/gp/*.csv
+
