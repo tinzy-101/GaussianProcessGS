@@ -1,6 +1,6 @@
 import os
 # config.py
-SCENE_NAME = "kitchen"  #to train on different scene jsut change this
+SCENE_NAME = "flowers"  #to train on different scene jsut change this
 
 BASE_DIR = f"mipnerf360/{SCENE_NAME}/"
 POINTS3D_PATH = BASE_DIR + "sparse/0/points3D.txt"

@@ -20,7 +20,7 @@ if os.path.exists(colmap_images):
             ln=ln.strip()
             if not ln or ln.startswith("#"): continue
             p=ln.split()
-            if p[0].isdigit() and len(p) >= 10:
+            if p[0].isdigit() and len(p) == 10:
                 order.append(p[9])  # NAME
     img_files = [os.path.join(image_dir, os.path.basename(n)) for n in order]
 else:
